@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: edge-server
+  labels:
+    app: edge-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: edge-server
+  template:
+    metadata:
+      labels:
+        app: edge-server
+    spec:
+      containers:
+      - image: edge-server:latest
+        name: edge-server
+        env:
+        - name: EDGE_SERVER_PORT
+          value: '8000'
+        ports:
+        - name: es-port
+          containerPort: 8000
+        imagePullPolicy: Never
+---
+kind: ServiceMonitor
+apiVersion: monitoring.coreos.com/v1
+metadata:
+  name: edge-server
+  labels:
+    app: edge-server
+spec:
+  selector:
+    matchLabels:
+      app: edge-server
+  endpoints:
+  - port: es-port
+    interval: 3s
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: edge-server
+  labels:
+    app: edge-server
+spec:
+  ports:
+  - name: es-port
+    port: 8000
+    nodePort: 30800
+    targetPort: 8000
+  selector:
+    app: edge-server
+  type: NodePort
+---
+kind: HorizontalPodAutoscaler
+apiVersion: autoscaling/v2beta1
+metadata:
+  name: edge-server
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: edge-server
+  minReplicas: 1
+  maxReplicas: 10
+  metrics:
+  - type: Pods
+    pods:
+      metricName: flask_http_requests_per_second
+      targetAverageValue: 200m

@@ -188,12 +188,12 @@ index b2578e10..d63b28fb 100644
 @@ -137,7 +137,7 @@ apiserver_custom_flags: []
  # List of the preferred NodeAddressTypes to use for kubelet connections.
  kubelet_preferred_address_types: 'InternalDNS,InternalIP,Hostname,ExternalDNS,ExternalIP'
- 
+
 -controller_mgr_custom_flags: []
 +controller_mgr_custom_flags: ['horizontal-pod-autoscaler-cpu-initialization-period: 15s', 'horizontal-pod-autoscaler-downscale-stabilization: 15s', 'horizontal-pod-autoscaler-initial-readiness-delay: 15s']
- 
+
  scheduler_custom_flags: []
- 
+
 diff --git a/roles/kubernetes/master/templates/kubeadm-config.v1beta1.yaml.j2 b/roles/kubernetes/master/templates/kubeadm-config.v1beta1.yaml.j2
 index 09b546c2..857ee0b6 100644
 --- a/roles/kubernetes/master/templates/kubeadm-config.v1beta1.yaml.j2
@@ -218,11 +218,11 @@ index 6bf6c54b..f13c60d9 100644
 +++ b/roles/kubernetes/node/defaults/main.yml
 @@ -63,7 +63,7 @@ kubelet_load_modules: false
  kubelet_max_pods: 110
- 
+
  ## Support custom flags to be passed to kubelet
 -kubelet_custom_flags: []
 +kubelet_custom_flags: ['--authentication-token-webhook=true', '--authorization-mode=Webhook']
- 
+
  ## Support custom flags to be passed to kubelet only on nodes, not masters
  kubelet_node_custom_flags: []
 ```
@@ -253,7 +253,7 @@ cp inventory/mycluster/artifacts/kubectl /usr/local/bin/kubectl
 After this as user you can access the newly created cluster using kubectl command. For example:
 
 ```
-[akouris@hephaestus kubespray]$ kubectl cluster-info 
+[akouris@hephaestus kubespray]$ kubectl cluster-info
 Kubernetes master is running at https://192.168.0.130:6443
 coredns is running at https://192.168.0.130:6443/api/v1/namespaces/kube-system/services/coredns:dns/proxy
 kubernetes-dashboard is running at https://192.168.0.130:6443/api/v1/namespaces/kube-system/services/https:kubernetes-dashboard:/proxy
@@ -375,7 +375,7 @@ local kp =
 #### prometheus-adapter-extra-conf.yaml
 ```
 rules:
-- seriesQuery: 'http_requests_total{namespace!="",kubernetes_pod_name!=""}'
+- seriesQuery: '{__name__="http_requests_total",namespace!="",kubernetes_pod_name!=""}'
   resources:
     template: <<.Resource>>
   name:
@@ -389,10 +389,78 @@ rules:
 
 ## Add services to control through their metrics
 
-TODO
+### edge-server
 
+#### Building appropriate images
 
+Edge server application has been dockerized and some metrics have been added through which scaling is going to be demonstrated. Also an edge-server-client application has been dockerized so that edge-server application can be tested.
 
+```
+git clone  --branch dockerize-edge-server https://github.com/tararouras/alphabot-ppl.git
+cd alphabot-ppl/
+
+# build edge-server:latest
+docker build -t edge-server:latest -f Dockerfile.edge_server .
+
+# build edge-server-client:latest
+docker build -t edge-server-client:latest -f Dockerfile.edge_server_client .
+```
+
+Now `edge-server:latest` image should be "copied" to all kubernetes nodes that can launch a pod using this image. To do that we can use `docker save` and `docker load` commands:
+
+```
+# create a file containing edge-server:latest image that can be used to copy
+# it to kubernetes nodes
+docker save -o edge-server.image edge-server:latest
+
+# assuming kubernetes nodes are on the hosts: master1, master2 and node1
+# on which ssh can be used perform the following
+
+# become root (this is only needed to avoid using sudo)
+sudo su
+
+# copy edge-server.image file to kubernetes nodes
+for n in node1 master2 master1; do scp edge-server.image $n:/tmp/; done
+
+# load edge-server:latest image on these nodes and remove edge-server.image file
+for n in node1 master2 master1; do ssh $n docker load -i /tmp/edge-server.image; rm /tmp/edge-server.image; done
+```
+
+#### Launching edge-server service with HPA controller
+
+[edge-server.yaml](./edge-server.yaml) file can be used to create edge-server service whose replication factor can be controlled by kubernetes horizontal pod autoscaler.
+
+After launching kube-prometheus manifests for custom-metrics support as explained before (and edge-server metrics rules defined) edge-server resources can be launched with:
+
+```
+docker create -f edge-server.yaml
+```
+
+This should create `Deployment` with 1 `edge-server` `Pod`, an `edge-server` `Service` and an `HorizontalPodAutoscaler` resources. Also `ServiceMonitor` resource is created that is used by prometheus node-exporter so that prometheus gets notified about this service, to poll for metrics.
+
+The simpliest way to test this setup is to open 2 consoles and execute the following:
+
+In one console monitor HPAs
+```
+# first console, monitor hpas
+# something like the following should be displayed:
+# NAME          REFERENCE                TARGETS   MINPODS   MAXPODS   REPLICAS   AGE
+# edge-server   Deployment/edge-server   0/200m    1         10        1          57m
+watch -n 2 kubectl get horizontalpodautoscalers.autoscaling
+```
+
+In second console run edge-server-client application.
+```
+# assuming that edge-server-client:latest is already built as described before
+docker run -it --rm \
+    -e EDGE_SERVER_IP_ADDR=192.168.0.132 \ # replace this with any kubernetes node IP address
+    -e EDGE_SERVER_PORT=30800 \ # by default edge-server service creates a NodePort and listens on 30800 on nodes
+    -e RUNNING_PERIOD=180 \ # for how long should this command run
+    -e RUNNING_INTERVAL=2.5 \ # control the rate of the requests by providing loop interval
+    edge-server-client:latest
+```
+
+The above should start edge-server-client application which every `RUNNING_INTERVAL` seconds sends an image to the edge-server service. This makes edge-server produce metric `flask_http_request_total` through which this example is scaled with. Then prometheus-adapter converts this metric to a rate metric called `flask_http_requests_per_second` that HPS uses for scaling Deployment.
 
 
 [^1]: On Fedora 28 the easiest way is to create a user account and set it administrator. Then on first boot perform the following: `sudo su` to switch to root user, `passwd` to set root user password. Then root account access is ready.
