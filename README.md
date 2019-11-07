@@ -2,11 +2,11 @@
 
 For kubernetes cluster creation [kubespray][1] is used. As is states, it allows deploying production ready kubernetes cluster. It uses ansible and thus it is highly configurable. See [documentation][2] for more information.
 
-## Preparation
+## Preparation for kubernetes deployment
 
 ### Preparation of hosts
 
-Before starting the deployment target hosts need to be specified. According to [kubespray requirements](https://kubespray.io/#/?id=requirements) the targets:
+Before starting the deployment, target hosts need to be specified. According to [kubespray requirements](https://kubespray.io/#/?id=requirements) the targets:
 
  * must have access to the Internet(although offline environments are also supported with additional configuration),
  * should allow IPv4 forwarding,
@@ -227,7 +227,7 @@ index 6bf6c54b..f13c60d9 100644
  kubelet_node_custom_flags: []
 ```
 
-### Deploy k8s cluster using kubespray
+## Deploy k8s cluster using kubespray
 
 After making all the adaptations described above execute the following as root:
 
@@ -293,7 +293,7 @@ Kubernetes is now ready to be used.
 
 ## Add metrics support with Prometheus
 
-To support gathering metrics from kubernetes and applications running on k8s cluster, [tararouras/kube-prometheus][5] (which is forked from [coreos/kube-prometheus](https://github.com/coreos/kube-prometheus)) is going to be used.
+To support gathering metrics from kubernetes and applications running on k8s cluster, [tararouras/kube-prometheus][5] (which is forked from [coreos/kube-prometheus](https://github.com/coreos/kube-prometheus)) is going to be used. This project provides an easy way to configure and deploy a complete stack of monitoring for kubernetes deployment.
 
 ### Quick Start
 
@@ -387,7 +387,7 @@ rules:
 > For information about how to write prometheus-adapter rules check [prometheus-adapter walk-through](https://github.com/DirectXMan12/k8s-prometheus-adapter/blob/master/docs/config-walkthrough.md)
 
 
-## Add services to control through their metrics
+## Add services and control scaling through their metrics
 
 ### edge-server
 
@@ -396,6 +396,7 @@ rules:
 Edge server application has been dockerized and some metrics have been added through which scaling is going to be demonstrated. Also an edge-server-client application has been dockerized so that edge-server application can be tested.
 
 ```
+# clone project and check out dockerize-edge-server branch
 git clone  --branch dockerize-edge-server https://github.com/tararouras/alphabot-ppl.git
 cd alphabot-ppl/
 
@@ -428,9 +429,9 @@ for n in node1 master2 master1; do ssh $n docker load -i /tmp/edge-server.image;
 
 #### Launching edge-server service with HPA controller
 
-[edge-server.yaml](./edge-server.yaml) file can be used to create edge-server service whose replication factor can be controlled by kubernetes horizontal pod autoscaler.
+[edge-server.yaml](https://github.com/tararouras/alphabot-ppl/blob/dockerize-edge-server/edge-server.yaml) file can be used to create edge-server service whose replication factor can be controlled by kubernetes horizontal pod autoscaler.
 
-After launching kube-prometheus manifests for custom-metrics support as explained before (and edge-server metrics rules defined) edge-server resources can be launched with:
+After launching kube-prometheus manifests for [custom-metrics support](https://github.com/tararouras/alphabot-ppl/blob/dockerize-edge-server/custom-metrics.jsonnet) as explained before (and edge-server metrics rules defined) edge-server resources can be launched with:
 
 ```
 docker create -f edge-server.yaml
@@ -460,7 +461,22 @@ docker run -it --rm \
     edge-server-client:latest
 ```
 
-The above should start edge-server-client application which every `RUNNING_INTERVAL` seconds sends an image to the edge-server service. This makes edge-server produce metric `flask_http_request_total` through which this example is scaled with. Then prometheus-adapter converts this metric to a rate metric called `flask_http_requests_per_second` that HPS uses for scaling Deployment.
+The above should start edge-server-client application which every `RUNNING_INTERVAL` seconds sends an image to the edge-server service. This makes edge-server produce metric `flask_http_request_total` through which this example is scaled with. Then prometheus-adapter converts this metric to a rate metric called `flask_http_requests_per_second` that HPS uses for scaling Deployment. You will notice that as edge_server_client performs the post requests towards the server, `flask_http_requests_per_second` increases. HPA increases the replication number in the deployment in an attempt to maintain the target defined ( `flask_http_requests_per_second = 200m`).
+
+Similarly when the client stops producing post requests, HPA decreases the replication number since `flask_http_requests_per_second` metric value falls bellow target.
+
+## Next steps
+
+Suggestions on how to proceed:
+
+1. *Properly deploy k8s setup*: Prepare a k8s environment where testing can take place.
+2. *Applications instrumentation*: Decide what metrics apart from resources usage matter for applications to be monitored for (e.g. request rate or requaest latency).
+3. *Prometheus adapter configuration*: Produce rules for application metrics to be exported to kubernetes. This shall be accessed by application HPA.
+4. *Application deployment*: Create appropriate configuration for launching applicattion, Deployment, Service and HorizontalPodAutoscaler.
+5. *Run testing scenarion*: Use testing application to produce change in monitored metrics which shall produce scaling events.
+6. *Retrieve metrics*: Using grafana observe executed scenario metrics (metrics visualization).
+7. *Compare different scaling scenarios*: Compare two or more scaling scenarios results.
+
 
 
 [^1]: On Fedora 28 the easiest way is to create a user account and set it administrator. Then on first boot perform the following: `sudo su` to switch to root user, `passwd` to set root user password. Then root account access is ready.
